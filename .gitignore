@@ -3,7 +3,6 @@ node_modules/
 site/node_modules/
 
 # Build outputs
-docs/
 site/dist/
 output/
 *.iso
