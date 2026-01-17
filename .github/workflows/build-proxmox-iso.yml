@@ -1,0 +1,516 @@
+name: Build Proxmox Auto-Install ISOs
+
+on:
+  workflow_dispatch:
+    inputs:
+      profiles:
+        description: 'Comma-separated list of profile names to build (leave empty for all)'
+        required: false
+        type: string
+        default: ''
+      iso_source:
+        description: 'ISO source type'
+        required: true
+        type: choice
+        options:
+          - url
+          - release
+        default: 'url'
+      iso_url:
+        description: 'Proxmox ISO URL (if source is url)'
+        required: false
+        type: string
+        default: 'https://enterprise.proxmox.com/iso/proxmox-ve_8.4-1.iso'
+      iso_checksum:
+        description: 'ISO SHA256 checksum (optional, for verification)'
+        required: false
+        type: string
+        default: ''
+      release_tag:
+        description: 'GitHub Release tag (if source is release, or for output)'
+        required: false
+        type: string
+        default: ''
+      publish_release:
+        description: 'Publish built ISOs to GitHub Release'
+        required: false
+        type: boolean
+        default: false
+      build_netboot:
+        description: 'Build netboot assets (kernel + initrd with embedded ISO)'
+        required: false
+        type: boolean
+        default: false
+
+  push:
+    paths:
+      - 'profiles/*.json'
+      - 'answers/*.toml'
+    branches:
+      - main
+      - master
+
+  # Trigger via issue with "build-request" label
+  issues:
+    types: [labeled]
+
+env:
+  PVE_VERSION: '8.4-1'
+  CACHE_KEY_PREFIX: 'proxmox-iso'
+
+jobs:
+  prepare:
+    name: Prepare Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      iso_filename: ${{ steps.set-matrix.outputs.iso_filename }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine profiles to build
+        id: set-matrix
+        run: |
+          # Get list of profile files
+          PROFILE_FILES=$(ls profiles/*.json 2>/dev/null || echo "")
+
+          if [ -z "$PROFILE_FILES" ]; then
+            echo "No profile files found in profiles/"
+            echo "matrix={\"profile\":[]}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # If specific profiles requested, filter
+          INPUT_PROFILES="${{ github.event.inputs.profiles }}"
+
+          if [ -n "$INPUT_PROFILES" ]; then
+            # Convert comma-separated to array and filter
+            PROFILES_JSON="["
+            FIRST=true
+            for profile in $(echo "$INPUT_PROFILES" | tr ',' ' '); do
+              if [ -f "profiles/${profile}.json" ]; then
+                if [ "$FIRST" = true ]; then
+                  FIRST=false
+                else
+                  PROFILES_JSON+=","
+                fi
+                PROFILES_JSON+="\"${profile}\""
+              fi
+            done
+            PROFILES_JSON+="]"
+          else
+            # Build all profiles
+            PROFILES_JSON=$(ls profiles/*.json | xargs -I {} basename {} .json | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
+
+          echo "Building profiles: $PROFILES_JSON"
+          echo "matrix={\"profile\":$PROFILES_JSON}" >> $GITHUB_OUTPUT
+
+          # Set ISO filename for caching
+          echo "iso_filename=proxmox-ve_${{ env.PVE_VERSION }}.iso" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build ISO - ${{ matrix.profile }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.matrix != '{"profile":[]}' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso squashfs-tools wget jq
+
+      - name: Cache Proxmox ISO
+        id: cache-iso
+        uses: actions/cache@v4
+        with:
+          path: ./base-iso
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ env.PVE_VERSION }}-${{ github.event.inputs.iso_checksum || 'default' }}
+          restore-keys: |
+            ${{ env.CACHE_KEY_PREFIX }}-${{ env.PVE_VERSION }}-
+
+      - name: Download Proxmox ISO
+        if: steps.cache-iso.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ./base-iso
+          ISO_URL="${{ github.event.inputs.iso_url }}"
+
+          if [ "${{ github.event.inputs.iso_source }}" = "release" ]; then
+            # Download from GitHub Release
+            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+            if [ -z "$RELEASE_TAG" ]; then
+              RELEASE_TAG="latest"
+            fi
+            gh release download "$RELEASE_TAG" --pattern "*.iso" --dir ./base-iso || {
+              echo "Failed to download ISO from release"
+              exit 1
+            }
+          else
+            # Download from URL
+            if [ -z "$ISO_URL" ]; then
+              ISO_URL="https://enterprise.proxmox.com/iso/proxmox-ve_${{ env.PVE_VERSION }}.iso"
+            fi
+            wget -q --show-progress -O "./base-iso/proxmox-ve.iso" "$ISO_URL"
+          fi
+
+          # Verify checksum if provided
+          CHECKSUM="${{ github.event.inputs.iso_checksum }}"
+          if [ -n "$CHECKSUM" ]; then
+            echo "Verifying checksum..."
+            ISO_FILE=$(ls ./base-iso/*.iso | head -1)
+            ACTUAL=$(sha256sum "$ISO_FILE" | awk '{print $1}')
+            EXPECTED=$(echo "$CHECKSUM" | sed 's/^sha256://')
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "Checksum mismatch!"
+              echo "Expected: $EXPECTED"
+              echo "Actual:   $ACTUAL"
+              exit 1
+            fi
+            echo "Checksum verified!"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Install proxmox-auto-install-assistant
+        run: |
+          # Add Proxmox repository
+          wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg" | sudo tee /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg > /dev/null
+          echo "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription" | sudo tee /etc/apt/sources.list.d/pve.list
+          sudo apt-get update
+          sudo apt-get install -y proxmox-auto-install-assistant || {
+            echo "Failed to install from repo, trying container approach..."
+            # Fallback: Use Docker
+            docker build -t pve-assistant -f Dockerfile.assistant .
+          }
+
+      - name: Read profile and generate answer.toml
+        id: generate-answer
+        run: |
+          PROFILE_NAME="${{ matrix.profile }}"
+          PROFILE_FILE="profiles/${PROFILE_NAME}.json"
+
+          if [ ! -f "$PROFILE_FILE" ]; then
+            echo "Profile file not found: $PROFILE_FILE"
+            exit 1
+          fi
+
+          # Read profile
+          FQDN=$(jq -r '.global.fqdn' "$PROFILE_FILE")
+          KEYBOARD=$(jq -r '.global.keyboard // "en-us"' "$PROFILE_FILE")
+          COUNTRY=$(jq -r '.global.country // "us"' "$PROFILE_FILE")
+          MAILTO=$(jq -r '.global.mailto // "root@localhost"' "$PROFILE_FILE")
+          TIMEZONE=$(jq -r '.global.timezone // "UTC"' "$PROFILE_FILE")
+
+          # Network
+          NET_SOURCE=$(jq -r '.network.source // "from-dhcp"' "$PROFILE_FILE")
+          NET_CIDR=$(jq -r '.network.cidr // ""' "$PROFILE_FILE")
+          NET_GW=$(jq -r '.network.gateway // ""' "$PROFILE_FILE")
+          NET_DNS=$(jq -r '.network.dns // ""' "$PROFILE_FILE")
+
+          # Disk
+          FS=$(jq -r '.diskSetup.filesystem // "zfs"' "$PROFILE_FILE")
+          DISKS=$(jq -r '.diskSetup.diskList // [] | join(", ") | if . == "" then "sda" else . end' "$PROFILE_FILE")
+          ZFS_RAID=$(jq -r '.diskSetup.zfs.raid // "raid1"' "$PROFILE_FILE")
+          ZFS_ASHIFT=$(jq -r '.diskSetup.zfs.ashift // 12' "$PROFILE_FILE")
+          ZFS_COMPRESS=$(jq -r '.diskSetup.zfs.compress // "lz4"' "$PROFILE_FILE")
+
+          # Create answer.toml
+          mkdir -p ./answers
+          cat > "./answers/${PROFILE_NAME}.toml" << EOF
+          # Proxmox Auto-Install Answer File
+          # Profile: ${PROFILE_NAME}
+          # Generated: $(date -Iseconds)
+
+          [global]
+          keyboard = "${KEYBOARD}"
+          country = "${COUNTRY}"
+          fqdn = "${FQDN}"
+          mailto = "${MAILTO}"
+          timezone = "${TIMEZONE}"
+          root-password = "${{ secrets.ROOT_PASSWORD }}"
+          root-ssh-keys = ["${{ secrets.ROOT_SSH_KEY }}"]
+          reboot-on-error = false
+
+          [network]
+          source = "${NET_SOURCE}"
+          EOF
+
+          if [ "$NET_SOURCE" = "from-answer" ]; then
+            cat >> "./answers/${PROFILE_NAME}.toml" << EOF
+          cidr = "${NET_CIDR}"
+          gateway = "${NET_GW}"
+          dns = "${NET_DNS}"
+          EOF
+          fi
+
+          cat >> "./answers/${PROFILE_NAME}.toml" << EOF
+
+          [disk-setup]
+          filesystem = "${FS}"
+          disk-list = [$(echo "$DISKS" | sed 's/\([^,]*\)/"\1"/g')]
+          EOF
+
+          if [ "$FS" = "zfs" ]; then
+            cat >> "./answers/${PROFILE_NAME}.toml" << EOF
+
+          zfs.raid = "${ZFS_RAID}"
+          zfs.ashift = ${ZFS_ASHIFT}
+          zfs.compress = "${ZFS_COMPRESS}"
+          EOF
+          fi
+
+          echo "Generated answer.toml for ${PROFILE_NAME}:"
+          cat "./answers/${PROFILE_NAME}.toml"
+
+          echo "profile_name=${PROFILE_NAME}" >> $GITHUB_OUTPUT
+          echo "fqdn=${FQDN}" >> $GITHUB_OUTPUT
+
+      - name: Validate answer.toml
+        run: |
+          PROFILE_NAME="${{ matrix.profile }}"
+          if command -v proxmox-auto-install-assistant &> /dev/null; then
+            proxmox-auto-install-assistant validate-answer "./answers/${PROFILE_NAME}.toml" || {
+              echo "Answer file validation failed!"
+              cat "./answers/${PROFILE_NAME}.toml"
+              exit 1
+            }
+          else
+            echo "Skipping validation (assistant not available)"
+          fi
+
+      - name: Build auto-install ISO
+        run: |
+          PROFILE_NAME="${{ matrix.profile }}"
+          ISO_FILE=$(ls ./base-iso/*.iso | head -1)
+          OUTPUT_ISO="./output/proxmox-${PROFILE_NAME}-autoinstall.iso"
+
+          mkdir -p ./output
+
+          if command -v proxmox-auto-install-assistant &> /dev/null; then
+            proxmox-auto-install-assistant prepare-iso "$ISO_FILE" \
+              --fetch-from iso \
+              --answer-file "./answers/${PROFILE_NAME}.toml" \
+              --output "$OUTPUT_ISO"
+          else
+            # Use Docker fallback
+            docker run --rm \
+              -v "$(pwd)/base-iso:/input:ro" \
+              -v "$(pwd)/answers:/answers:ro" \
+              -v "$(pwd)/output:/output" \
+              pve-assistant prepare-iso \
+              "/input/$(basename $ISO_FILE)" \
+              --fetch-from iso \
+              --answer-file "/answers/${PROFILE_NAME}.toml" \
+              --output "/output/proxmox-${PROFILE_NAME}-autoinstall.iso"
+          fi
+
+          echo "Built ISO: $OUTPUT_ISO"
+          ls -lh "$OUTPUT_ISO"
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxmox-${{ matrix.profile }}-autoinstall-iso
+          path: ./output/*.iso
+          retention-days: 7
+
+      - name: Upload answer.toml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.profile }}-answer-toml
+          path: ./answers/${{ matrix.profile }}.toml
+          retention-days: 30
+
+  build-netboot:
+    name: Build Netboot Assets
+    needs: [prepare, build]
+    if: ${{ github.event.inputs.build_netboot == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all ISO artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          pattern: '*-autoinstall-iso'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso squashfs-tools cpio zstd
+
+      - name: Extract kernel and prepare netboot
+        run: |
+          mkdir -p ./netboot-output/proxmox
+          mkdir -p ./netboot-output/ipxe
+
+          # Find first ISO to extract kernel
+          FIRST_ISO=$(find ./artifacts -name "*.iso" | head -1)
+
+          if [ -z "$FIRST_ISO" ]; then
+            echo "No ISO found!"
+            exit 1
+          fi
+
+          # Mount and extract kernel
+          mkdir -p /tmp/iso-mount
+          sudo mount -o loop "$FIRST_ISO" /tmp/iso-mount
+
+          cp /tmp/iso-mount/boot/linux26 ./netboot-output/proxmox/vmlinuz
+
+          # For each ISO, create initrd with embedded ISO
+          for ISO in ./artifacts/*/*.iso; do
+            PROFILE=$(basename "$ISO" .iso | sed 's/proxmox-\(.*\)-autoinstall/\1/')
+            echo "Processing $PROFILE..."
+
+            # Extract initrd
+            cp /tmp/iso-mount/boot/initrd.img "/tmp/initrd-${PROFILE}.img"
+
+            # Decompress initrd (zstd)
+            mkdir -p "/tmp/initrd-${PROFILE}"
+            cd "/tmp/initrd-${PROFILE}"
+            zstd -d "../initrd-${PROFILE}.img" -o initrd.cpio
+            cpio -idv < initrd.cpio
+
+            # Embed the ISO
+            cp "$ISO" proxmox.iso
+
+            # Repack
+            find . | cpio --quiet -o -H newc > "../${PROFILE}-new.cpio"
+            zstd -5 "../${PROFILE}-new.cpio" -o "${{ github.workspace }}/netboot-output/proxmox/${PROFILE}-initrd.img"
+
+            cd "${{ github.workspace }}"
+            rm -rf "/tmp/initrd-${PROFILE}"
+          done
+
+          sudo umount /tmp/iso-mount
+
+          # Generate iPXE menu
+          cat > ./netboot-output/ipxe/menu.ipxe << 'IPXE'
+          #!ipxe
+          # Proxmox Deployer - Auto-generated iPXE Menu
+
+          dhcp
+          set menu-timeout 30000
+          set base-url http://${next-server}/netboot
+
+          :start
+          menu Proxmox Deployer - Select Profile
+          IPXE
+
+          # Add menu items for each profile
+          for ISO in ./artifacts/*/*.iso; do
+            PROFILE=$(basename "$ISO" .iso | sed 's/proxmox-\(.*\)-autoinstall/\1/')
+            echo "item ${PROFILE} Install ${PROFILE}" >> ./netboot-output/ipxe/menu.ipxe
+          done
+
+          cat >> ./netboot-output/ipxe/menu.ipxe << 'IPXE'
+          item shell iPXE Shell
+          choose --timeout ${menu-timeout} --default shell selected || goto shell
+          goto ${selected}
+
+          IPXE
+
+          # Add boot targets
+          for ISO in ./artifacts/*/*.iso; do
+            PROFILE=$(basename "$ISO" .iso | sed 's/proxmox-\(.*\)-autoinstall/\1/')
+            cat >> ./netboot-output/ipxe/menu.ipxe << BOOT
+
+          :${PROFILE}
+          kernel \${base-url}/proxmox/vmlinuz ro quiet ramdisk_size=16777216
+          initrd \${base-url}/proxmox/${PROFILE}-initrd.img
+          boot
+          BOOT
+          done
+
+          echo -e "\n:shell\nshell" >> ./netboot-output/ipxe/menu.ipxe
+
+          echo "Generated iPXE menu:"
+          cat ./netboot-output/ipxe/menu.ipxe
+
+      - name: Upload netboot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: netboot-assets
+          path: ./netboot-output/
+          retention-days: 30
+
+  release:
+    name: Publish Release
+    needs: [build, build-netboot]
+    if: ${{ always() && github.event.inputs.publish_release == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
+
+      - name: Prepare release files
+        run: |
+          mkdir -p ./release-files
+          find ./release-assets -name "*.iso" -exec cp {} ./release-files/ \;
+          find ./release-assets -name "*.toml" -exec cp {} ./release-files/ \;
+
+          # Create checksums
+          cd ./release-files
+          sha256sum * > SHA256SUMS.txt
+          cd ..
+
+      - name: Create/Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || format('build-{0}', github.run_number) }}
+          name: Proxmox Auto-Install ISOs - ${{ github.event.inputs.release_tag || github.run_number }}
+          body: |
+            ## Proxmox Auto-Install ISOs
+
+            Built from profiles in this repository.
+
+            ### Included Profiles
+            See the individual `.toml` files for configuration details.
+
+            ### Usage
+            1. Download the ISO for your target node
+            2. Write to USB: `dd if=proxmox-<profile>-autoinstall.iso of=/dev/sdX bs=4M status=progress`
+            3. Boot from USB - installation is fully automated
+
+            ### Checksums
+            See `SHA256SUMS.txt` for file checksums.
+
+            ---
+            *Built by GitHub Actions on ${{ github.event.repository.updated_at }}*
+          files: ./release-files/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Cleanup old workflow runs
+  cleanup:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 30
+          keep_minimum_runs: 5

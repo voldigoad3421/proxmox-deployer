@@ -1,0 +1,70 @@
+#!ipxe
+# Proxmox Deployer - iPXE Boot Menu Template
+# This file is auto-generated. Edit profiles via the web UI.
+
+# Configure these variables for your environment
+set menu-timeout 30000
+set submenu-timeout ${menu-timeout}
+
+# Set your HTTP server URL
+# For GitHub Pages: https://YOUR_USERNAME.github.io/proxmox-deployer/netboot
+# For local server: http://192.168.1.10/netboot
+set base-url http://${next-server}/netboot
+
+# Get DHCP info
+dhcp
+
+# Main menu
+:start
+menu Proxmox Deployer - Automated Installation
+item --gap -- --------------------------------
+item --gap -- Available Profiles:
+# PROFILES_START - Do not remove this comment
+# Profile items will be inserted here by the build process
+# PROFILES_END - Do not remove this comment
+item --gap -- --------------------------------
+item --key c config Configuration
+item --key s shell iPXE Shell
+item --key r reboot Reboot
+item --key x exit Exit to BIOS
+choose --timeout ${menu-timeout} --default shell selected || goto shell
+goto ${selected}
+
+# Configuration submenu
+:config
+menu Configuration
+item --key b set-base-url Change base URL
+item --key d show-dhcp Show DHCP info
+item back Back to main menu
+choose selected || goto start
+goto ${selected}
+
+:set-base-url
+echo -n Enter new base URL:
+read base-url
+goto start
+
+:show-dhcp
+echo IP: ${ip}
+echo Gateway: ${gateway}
+echo DNS: ${dns}
+echo Next Server: ${next-server}
+echo
+prompt Press any key to continue...
+goto start
+
+:shell
+echo Entering iPXE shell...
+echo Type 'exit' to return to menu
+shell
+goto start
+
+:reboot
+reboot
+
+:exit
+exit
+
+# Boot targets will be appended below by the build process
+# BOOT_TARGETS_START
+# BOOT_TARGETS_END

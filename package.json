@@ -1,0 +1,25 @@
+{
+  "name": "proxmox-deployer",
+  "version": "1.0.0",
+  "description": "Self-service Proxmox deployment platform with GitHub Actions ISO builder",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix site",
+    "build": "npm run build --prefix site",
+    "preview": "npm run preview --prefix site"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voldigoad3421/proxmox-deployer.git"
+  },
+  "keywords": [
+    "proxmox",
+    "deployment",
+    "automation",
+    "iso-builder",
+    "ipxe",
+    "netboot"
+  ],
+  "author": "",
+  "license": "MIT"
+}

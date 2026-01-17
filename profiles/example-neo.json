@@ -1,0 +1,33 @@
+{
+  "id": "example-neo",
+  "name": "neo",
+  "description": "ZION Hypervisor Node 2 - Example profile",
+  "global": {
+    "keyboard": "en-us",
+    "country": "us",
+    "fqdn": "neo.zion.local",
+    "mailto": "admin@zion.local",
+    "timezone": "America/New_York",
+    "rebootOnError": false,
+    "rebootMode": "reboot"
+  },
+  "network": {
+    "source": "from-answer",
+    "cidr": "172.20.0.11/24",
+    "gateway": "172.20.0.1",
+    "dns": "172.20.0.1"
+  },
+  "diskSetup": {
+    "filesystem": "zfs",
+    "diskList": ["nvme0n1", "nvme1n1"],
+    "zfs": {
+      "raid": "raid1",
+      "ashift": 12,
+      "compress": "zstd",
+      "checksum": "sha256",
+      "arcMax": 8192
+    }
+  },
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

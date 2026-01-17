@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+site/node_modules/
+
+# Build outputs
+docs/
+site/dist/
+output/
+*.iso
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Generated files that may contain secrets
+answers/*.toml
+!answers/.gitkeep
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Netboot build outputs (large files)
+netboot-output/
+netboot/proxmox/*.img
+netboot/proxmox/vmlinuz
+
+# Lock files (optional - uncomment if you want to ignore)
+# package-lock.json
+# site/package-lock.json

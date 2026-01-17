@@ -1,0 +1,30 @@
+# Alternative Dockerfile that builds the assistant from source
+# Use this if the package repository is unavailable
+
+FROM debian:bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    gnupg \
+    xorriso \
+    squashfs-tools \
+    fakeroot \
+    ca-certificates \
+    git \
+    rustc \
+    cargo \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and build from source
+RUN git clone https://git.proxmox.com/git/pve-installer.git /tmp/pve-installer \
+    && cd /tmp/pve-installer/proxmox-auto-install-assistant \
+    && cargo build --release \
+    && cp target/release/proxmox-auto-install-assistant /usr/local/bin/ \
+    && rm -rf /tmp/pve-installer
+
+WORKDIR /workspace
+
+ENTRYPOINT ["proxmox-auto-install-assistant"]
+CMD ["--help"]
