@@ -60,6 +60,21 @@ export function ProfilesTab() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Info Banner */}
+      <div className="glass-card p-4 border-l-4 border-pve-accent">
+        <div className="flex items-start gap-3">
+          <div className="text-pve-accent text-xl">i</div>
+          <div className="text-sm">
+            <p className="text-white font-medium mb-1">How it works</p>
+            <p className="text-gray-400">
+              Profiles are saved in your browser. To build ISOs: <strong>1)</strong> Create profiles here,
+              <strong> 2)</strong> Export them and commit to <code className="bg-black/30 px-1 rounded">/profiles/</code> in your repo,
+              <strong> 3)</strong> Click <span className="text-green-400">Trigger Build</span> to run GitHub Actions.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Actions Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2">

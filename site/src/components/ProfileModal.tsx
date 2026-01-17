@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Eye, Save, AlertCircle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { generateAnswerToml, downloadFile } from '../utils/tomlGenerator';
-import { nodeProfileSchema, keyboardLayouts, timezones, countries } from '../schemas/answerSchema';
+import { keyboardLayouts, timezones, countries } from '../schemas/answerSchema';
 import type { NodeProfile, Filesystem, ZfsRaid, BtrfsRaid, NetworkSource } from '../types';
 import { generateProfileId } from '../utils/storage';
 
@@ -50,32 +50,38 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
   }, [currentProfile, isEditing]);
 
   const validateForm = (): boolean => {
-    try {
-      const now = new Date().toISOString();
-      nodeProfileSchema.parse({
-        ...formData,
-        id: currentProfile?.id || generateProfileId(),
-        createdAt: currentProfile?.createdAt || now,
-        updatedAt: now,
-        global: {
-          ...formData.global,
-          rootPassword: 'placeholder', // Will be replaced by secret
-        },
-      });
-      setErrors({});
-      return true;
-    } catch (err: unknown) {
-      if (err && typeof err === 'object' && 'errors' in err) {
-        const zodErr = err as { errors: Array<{ path: (string | number)[]; message: string }> };
-        const newErrors: Record<string, string> = {};
-        zodErr.errors.forEach((e) => {
-          const path = e.path.join('.');
-          newErrors[path] = e.message;
-        });
-        setErrors(newErrors);
-      }
+    const newErrors: Record<string, string> = {};
+
+    // Basic validation - only check required fields
+    if (!formData.name || formData.name.trim() === '') {
+      newErrors.name = 'Profile name is required';
+    }
+    if (!formData.global.fqdn || formData.global.fqdn.trim() === '') {
+      newErrors['global.fqdn'] = 'FQDN is required';
+    } else if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(formData.global.fqdn)) {
+      newErrors['global.fqdn'] = 'Invalid FQDN format (no underscores allowed)';
+    }
+    if (!formData.global.mailto || formData.global.mailto.trim() === '') {
+      newErrors['global.mailto'] = 'Email is required';
+    }
+
+    // Network validation
+    if (formData.network.source === 'from-answer') {
+      if (!formData.network.cidr) newErrors['network.cidr'] = 'IP/CIDR is required for static network';
+      if (!formData.network.gateway) newErrors['network.gateway'] = 'Gateway is required for static network';
+      if (!formData.network.dns) newErrors['network.dns'] = 'DNS is required for static network';
+    }
+
+    setErrors(newErrors);
+
+    if (Object.keys(newErrors).length > 0) {
+      // Show first error as alert for visibility
+      const firstError = Object.values(newErrors)[0];
+      alert(`Validation Error: ${firstError}`);
       return false;
     }
+
+    return true;
   };
 
   const handleSave = () => {
