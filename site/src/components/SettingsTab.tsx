@@ -1,6 +1,7 @@
 import { Settings, Save, RotateCcw, ExternalLink } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useState } from 'react';
+import { GitHubConnect } from './GitHubConnect';
 
 export function SettingsTab() {
   const { settings, updateSettings } = useStore();
@@ -36,6 +37,9 @@ export function SettingsTab() {
           </div>
         </div>
       </div>
+
+      {/* GitHub Connection */}
+      <GitHubConnect />
 
       {/* GitHub Settings */}
       <div className="glass-card p-6">

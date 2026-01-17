@@ -2,6 +2,7 @@ import { Plus, Upload, Download, Trash2, Copy, Edit, CheckSquare, Square } from 
 import { useStore } from '../store/useStore';
 import { exportProfiles, importProfiles as parseImport } from '../utils/storage';
 import { downloadFile } from '../utils/tomlGenerator';
+import { SyncToGitHub } from './SyncToGitHub';
 import type { NodeProfile } from '../types';
 
 export function ProfilesTab() {
@@ -60,20 +61,8 @@ export function ProfilesTab() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Info Banner */}
-      <div className="glass-card p-4 border-l-4 border-pve-accent">
-        <div className="flex items-start gap-3">
-          <div className="text-pve-accent text-xl">i</div>
-          <div className="text-sm">
-            <p className="text-white font-medium mb-1">How it works</p>
-            <p className="text-gray-400">
-              Profiles are saved in your browser. To build ISOs: <strong>1)</strong> Create profiles here,
-              <strong> 2)</strong> Export them and commit to <code className="bg-black/30 px-1 rounded">/profiles/</code> in your repo,
-              <strong> 3)</strong> Click <span className="text-green-400">Trigger Build</span> to run GitHub Actions.
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* Sync to GitHub */}
+      {profiles.length > 0 && <SyncToGitHub profiles={profiles} selectedOnly={selectedProfiles.length > 0} />}
 
       {/* Actions Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
